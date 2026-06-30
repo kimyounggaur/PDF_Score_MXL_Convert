@@ -9,3 +9,6 @@ work
 tmp
 *.log
 *.tsbuildinfo
+
+.vercel
+.env*
