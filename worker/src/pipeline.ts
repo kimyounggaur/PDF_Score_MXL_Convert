@@ -211,4 +211,17 @@ if (isDirectRun) {
   const worker = startWorker();
   worker.on("ready", () => console.log(`[worker] listening queue=${OMR_QUEUE_NAME}`));
   worker.on("failed", (job, error) => console.error(`[worker] job=${job?.id} failed`, error));
+
+  async function shutdown(signal: NodeJS.Signals): Promise<void> {
+    console.log(`[worker] received ${signal}; draining active jobs`);
+    await worker.close();
+    process.exit(0);
+  }
+
+  process.on("SIGTERM", () => {
+    void shutdown("SIGTERM");
+  });
+  process.on("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
 }

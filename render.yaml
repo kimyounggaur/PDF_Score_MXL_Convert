@@ -1,0 +1,28 @@
+services:
+  - type: worker
+    name: pdf-score-mxl-worker
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeployTrigger: commit
+    dockerfilePath: ./docker/Dockerfile.render-worker
+    dockerContext: .
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUDIVERIS_BIN
+        value: audiveris
+      - key: SUPABASE_URL
+        value: https://cgoafcjvnbzozxbbyfle.supabase.co
+      - key: SUPABASE_STORAGE_BUCKET
+        value: scores
+      - key: JOB_COST_LIMIT_USD
+        value: "2"
+      - key: WORKER_CONCURRENCY
+        value: "1"
+      - key: REDIS_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
