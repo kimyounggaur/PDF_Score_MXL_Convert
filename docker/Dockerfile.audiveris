@@ -1,0 +1,48 @@
+FROM eclipse-temurin:25-jdk
+
+ARG AUDIVERIS_TAG=5.10.2
+ARG NODE_VERSION=25.2.1
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    fontconfig \
+    fonts-freefont-ttf \
+    git \
+    libfreetype6 \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-kor \
+    unzip \
+    xxd \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" -o /tmp/node.tar.xz \
+  && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+  && rm /tmp/node.tar.xz \
+  && node --version \
+  && npm --version
+
+RUN git clone --depth 1 --branch "${AUDIVERIS_TAG}" https://github.com/Audiveris/audiveris.git /opt/audiveris-src \
+  && cd /opt/audiveris-src \
+  && ./gradlew clean distZip -x test \
+  && mkdir -p /opt/audiveris \
+  && unzip -q build/distributions/*.zip -d /opt/audiveris \
+  && first_dir="$(find /opt/audiveris -mindepth 1 -maxdepth 1 -type d | head -n 1)" \
+  && cp -R "$first_dir"/* /opt/audiveris/ \
+  && rm -rf /opt/audiveris-src
+
+RUN printf '#!/usr/bin/env bash\nexec /opt/audiveris/bin/Audiveris "$@"\n' > /usr/local/bin/audiveris \
+  && chmod +x /usr/local/bin/audiveris
+
+WORKDIR /app
+
+COPY docker/run-audiveris.sh /docker/run-audiveris.sh
+RUN chmod +x /docker/run-audiveris.sh
+
+CMD ["audiveris", "-help"]

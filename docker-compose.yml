@@ -1,0 +1,44 @@
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "6379:6379"
+
+  web:
+    image: node:25-bookworm
+    working_dir: /app
+    command: bash -lc "npm install && npm run dev"
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - .:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.audiveris
+    working_dir: /app
+    command: bash -lc "npm install && npm run worker"
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      AUDIVERIS_BIN: audiveris
+      WORKER_CONCURRENCY: "1"
+    volumes:
+      - .:/app
+    depends_on:
+      redis:
+        condition: service_healthy
