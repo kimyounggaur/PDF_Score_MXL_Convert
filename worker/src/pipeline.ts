@@ -12,6 +12,7 @@ import { renderPages } from "./render";
 import { parseMusicXml, unzipMxl } from "./musicxml";
 import { sliceSystems } from "./systems";
 import { verifyAllSystems, type SystemInput } from "./vision";
+import { getPersistedJobCostUsd, recordApiCost } from "./costLog";
 import { toPageVerifyResults } from "./adapt";
 import { applyCorrections } from "./apply";
 import { musicalSanity } from "./sanity";
@@ -110,6 +111,7 @@ export async function runPipeline(jobId: string): Promise<PipelineResult> {
     let costUsd = 0;
     const systemInputs: SystemInput[] = systemBoxes.map((box) => ({
       id: box.systemId,
+      page: box.page,
       imagePath: path.join(jobDir, "systems", `system-${box.systemId}.png`),
       measuresJson: box,
       measureNumbers: box.measureRange.flatMap((range) => [Number(range.from), Number(range.to)]).filter(Number.isFinite)
@@ -117,12 +119,19 @@ export async function runPipeline(jobId: string): Promise<PipelineResult> {
     const vision =
       process.env.ANTHROPIC_API_KEY && systemInputs.length > 0
         ? await verifyAllSystems(systemInputs, {
+            jobId,
             jobCostLimitUsd: Number(process.env.JOB_COST_LIMIT_USD ?? 2),
+            getPersistedCostUsd: () => getPersistedJobCostUsd(jobId),
+            recordCost: recordApiCost,
             wrongNotesEscalateThreshold: 2
           })
         : { results: [], totalCostUsd: 0, stoppedEarly: false };
     costUsd = vision.totalCostUsd;
     if (!process.env.ANTHROPIC_API_KEY) report.warnings.push("ANTHROPIC_API_KEY missing; skipped Claude Vision correction.");
+    if (vision.stoppedEarly) {
+      report.stopReason = "cost_limit";
+      report.warnings.push("Claude cost limit reached; skipped remaining Vision calls and returned the latest safe result.");
+    }
 
     await setStage(jobId, "apply");
     const pageResults = toPageVerifyResults(
@@ -150,6 +159,7 @@ export async function runPipeline(jobId: string): Promise<PipelineResult> {
     const resultMxlPath = await uploadResult(jobId, finalMxlPath);
 
     await setStage(jobId, "eval");
+    const finalStatus: JobStatus = vision.stoppedEarly ? "failed" : "done";
     const result: PipelineResult = {
       resultMxlPath,
       report,
@@ -160,11 +170,11 @@ export async function runPipeline(jobId: string): Promise<PipelineResult> {
       terminationReason: vision.stoppedEarly ? "cost_limit" : "converged"
     };
     await updateJob(jobId, {
-      status: "done",
+      status: finalStatus,
       stage: "eval",
       result_mxl_path: resultMxlPath,
       report,
-      cost_usd: costUsd,
+      error: vision.stoppedEarly ? "Claude cost limit reached; additional API calls were blocked." : null,
       needs_human_count: 0,
       accuracy_score: null
     });

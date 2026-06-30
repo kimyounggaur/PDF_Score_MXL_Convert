@@ -7,6 +7,7 @@ import { ProgressSteps } from "@/components/ProgressSteps";
 import { ScorePreview } from "@/components/ScorePreview";
 import { DiffReport } from "@/components/DiffReport";
 import { AccuracyBadge } from "@/components/AccuracyBadge";
+import { CostTracker } from "@/components/CostTracker";
 
 export function JobView({ id }: { id: string }) {
   const job = useJobPolling(id);
@@ -42,6 +43,15 @@ export function JobView({ id }: { id: string }) {
               <AlertTriangle size={20} aria-hidden /> 변환 실패
             </h2>
             <p className="error">{job.error}</p>
+            <CostTracker jobId={id} status={job.status} />
+            {job.downloadUrl ? (
+              <p>
+                <a className="button" href={job.downloadUrl} download>
+                  <Download size={16} aria-hidden />
+                  MXL 다운로드
+                </a>
+              </p>
+            ) : null}
           </section>
         ) : (
           <div className="job-grid">
@@ -65,6 +75,7 @@ export function JobView({ id }: { id: string }) {
                   <strong>{job.terminationReason ?? job.status}</strong>
                 </div>
               </div>
+              <CostTracker jobId={id} status={job.status} />
               {job.downloadUrl ? (
                 <p>
                   <a className="button" href={job.downloadUrl} download>

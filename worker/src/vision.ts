@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { Correction } from "@/shared/types";
+import { calculateCost, type ApiCostLogEntry, type ClaudeUsage, type CostBreakdown } from "./cost";
 
 export const EMPTY_CORRECTION: Correction = {
   missing_chords: [],
@@ -15,6 +16,8 @@ export interface VerifyResult {
   correction: Correction;
   model: VisionModel;
   costUsd: number;
+  cost: CostBreakdown;
+  usage: ClaudeUsage;
   raw: string | null;
   escalated: boolean;
 }
@@ -27,13 +30,22 @@ export interface VerifyOpts {
 
 export interface SystemInput {
   id: string;
+  page?: number;
   imagePath: string;
   measuresJson: object;
   measureNumbers: number[];
 }
 
 export interface VisionClient {
-  createMessage(input: Record<string, unknown>): Promise<{ content: unknown[]; usage?: Record<string, number> }>;
+  createMessage(input: Record<string, unknown>): Promise<{ content: unknown[]; usage?: ClaudeUsage }>;
+}
+
+export interface VisionBudget {
+  jobId?: string;
+  jobCostLimitUsd: number;
+  wrongNotesEscalateThreshold: number;
+  getPersistedCostUsd?: () => Promise<number>;
+  recordCost?: (entry: ApiCostLogEntry) => Promise<void>;
 }
 
 export const VERIFY_TOOL = {
@@ -100,12 +112,8 @@ export function parseClaudeCorrection(response: { content: unknown[] }): { corre
   return { correction: { ...EMPTY_CORRECTION, confidence: "low", notes: "Failed to parse Claude correction" }, raw };
 }
 
-export function estimateCostUsd(model: VisionModel, usage?: Record<string, number>): number {
-  const inputTokens = usage?.input_tokens ?? 0;
-  const outputTokens = usage?.output_tokens ?? 0;
-  const inputRate = model === "claude-opus-4-8" ? 5 : 3;
-  const outputRate = model === "claude-opus-4-8" ? 25 : 15;
-  return (inputTokens / 1_000_000) * inputRate + (outputTokens / 1_000_000) * outputRate;
+export function estimateCostUsd(model: VisionModel, usage?: ClaudeUsage): number {
+  return calculateCost(model, usage).totalUsd;
 }
 
 async function defaultVisionClient(): Promise<VisionClient> {
@@ -155,10 +163,13 @@ export async function verifySystem(
     ]
   });
   const parsed = parseClaudeCorrection(response);
+  const cost = calculateCost(model, response.usage);
   return {
     correction: parsed.correction,
     model,
-    costUsd: estimateCostUsd(model, response.usage),
+    costUsd: cost.totalUsd,
+    cost,
+    usage: response.usage ?? {},
     raw: parsed.raw,
     escalated: false
   };
@@ -166,14 +177,32 @@ export async function verifySystem(
 
 export async function verifyAllSystems(
   systems: SystemInput[],
-  budget: { jobCostLimitUsd: number; wrongNotesEscalateThreshold: number },
+  budget: VisionBudget,
   injectedClient?: VisionClient
 ): Promise<{ results: VerifyResult[]; totalCostUsd: number; stoppedEarly: boolean }> {
   const results: VerifyResult[] = [];
   let totalCostUsd = 0;
 
+  async function currentCostUsd(): Promise<number> {
+    return budget.getPersistedCostUsd ? await budget.getPersistedCostUsd() : totalCostUsd;
+  }
+
+  async function recordResult(sys: SystemInput, result: VerifyResult): Promise<void> {
+    totalCostUsd += result.costUsd;
+    if (!budget.recordCost || !budget.jobId) return;
+    await budget.recordCost({
+      jobId: budget.jobId,
+      pageNum: sys.page ?? null,
+      systemId: sys.id,
+      model: result.model,
+      usage: result.usage,
+      costUsd: result.costUsd,
+      breakdown: result.cost
+    });
+  }
+
   for (const sys of systems) {
-    if (totalCostUsd >= budget.jobCostLimitUsd) {
+    if ((await currentCostUsd()) >= budget.jobCostLimitUsd) {
       return { results, totalCostUsd, stoppedEarly: true };
     }
     let result = await verifySystem(
@@ -182,11 +211,11 @@ export async function verifyAllSystems(
       { measureNumbers: sys.measureNumbers, model: "claude-sonnet-4-6" },
       injectedClient
     );
-    totalCostUsd += result.costUsd;
+    await recordResult(sys, result);
     const wrongCount = result.correction.wrong_notes.length;
     if (
       (result.correction.confidence === "low" || wrongCount >= budget.wrongNotesEscalateThreshold) &&
-      totalCostUsd < budget.jobCostLimitUsd
+      (await currentCostUsd()) < budget.jobCostLimitUsd
     ) {
       const escalated = await verifySystem(
         sys.imagePath,
@@ -194,7 +223,7 @@ export async function verifyAllSystems(
         { measureNumbers: sys.measureNumbers, model: "claude-opus-4-8" },
         injectedClient
       );
-      totalCostUsd += escalated.costUsd;
+      await recordResult(sys, escalated);
       result = { ...escalated, escalated: true };
       console.log(`[escalate] system=${sys.id} -> opus`);
     }

@@ -52,4 +52,50 @@ describe("vision correction parsing", () => {
     expect(calls).toEqual(["claude-sonnet-4-6", "claude-opus-4-8"]);
     expect(result.results[0]?.escalated).toBe(true);
   });
+
+  it("records each Claude call immediately and stops before the next call when the persisted total reaches the limit", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vision-cost-test-"));
+    const image = join(dir, "system.png");
+    await writeFile(image, "fake");
+    const calls: string[] = [];
+    const recorded: Array<{ jobId: string; pageNum: number | null; model: string; costUsd: number }> = [];
+    let persistedTotal = 0;
+    const client = {
+      async createMessage(input: { model: string }) {
+        calls.push(input.model);
+        return {
+          content: [{
+            type: "tool_use",
+            input: { ...EMPTY_CORRECTION, confidence: "high" }
+          }],
+          usage: { input_tokens: 1_000_000, output_tokens: 0 }
+        };
+      }
+    };
+
+    const result = await verifyAllSystems(
+      [
+        { id: "p1-s1", page: 1, imagePath: image, measuresJson: {}, measureNumbers: [1] },
+        { id: "p2-s1", page: 2, imagePath: image, measuresJson: {}, measureNumbers: [2] }
+      ],
+      {
+        jobId: "job-1",
+        jobCostLimitUsd: 3,
+        getPersistedCostUsd: async () => persistedTotal,
+        recordCost: async (entry) => {
+          recorded.push(entry);
+          persistedTotal += entry.costUsd;
+        },
+        wrongNotesEscalateThreshold: 1
+      },
+      client
+    );
+
+    expect(calls).toEqual(["claude-sonnet-4-6"]);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ jobId: "job-1", pageNum: 1, model: "claude-sonnet-4-6" });
+    expect(recorded[0]?.costUsd).toBeCloseTo(3, 8);
+    expect(result.totalCostUsd).toBeCloseTo(3, 8);
+    expect(result.stoppedEarly).toBe(true);
+  });
 });

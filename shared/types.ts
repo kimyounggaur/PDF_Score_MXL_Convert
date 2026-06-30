@@ -86,3 +86,29 @@ export interface JobResponse {
   refineIterations: number | null;
   terminationReason: string | null;
 }
+
+export interface JobCostLogEntry {
+  id: string;
+  createdAt: string;
+  pageNum: number | null;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens5m: number;
+  cacheCreationInputTokens1h: number;
+  cacheReadInputTokens: number;
+  costUsd: number;
+}
+
+export interface JobCostResponse {
+  jobId: string;
+  totalCost: number;
+  limitUsd: number | null;
+  limitRatio: number | null;
+  breakdown: {
+    sonnet: number;
+    opus: number;
+    byModel: Record<string, number>;
+  };
+  pageLog: JobCostLogEntry[];
+}
