@@ -130,3 +130,9 @@ drop trigger if exists api_cost_log_daily_summary_trigger on public.api_cost_log
 create trigger api_cost_log_daily_summary_trigger
 after insert on public.api_cost_log
 for each row execute function public.refresh_daily_cost_summary_for_log();
+
+revoke all on function public.record_api_cost(uuid, int, text, int, int, int, int, int, numeric) from public, anon, authenticated;
+grant execute on function public.record_api_cost(uuid, int, text, int, int, int, int, int, numeric) to service_role;
+
+revoke all on function public.refresh_daily_cost_summary_for_log() from public, anon, authenticated;
+grant execute on function public.refresh_daily_cost_summary_for_log() to service_role;
